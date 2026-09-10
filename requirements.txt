@@ -1,0 +1,35 @@
+# Direct dependencies. Version floors are the oldest release known to work;
+# ceilings mark majors whose behaviour actually differs for this code.
+#
+# `requirements.lock.txt` holds the exact resolved set the test suite was last
+# run against — install from that for a reproducible environment, from this one
+# to pick up compatible updates.
+
+# pandas 3 changed the default string dtype and made copy-on-write mandatory.
+# The pipeline is written and tested against 3.x; do not silently fall back to
+# 2.x, where `_read_csv`'s dtype handling differs.
+pandas>=3.0,<4
+numpy>=2.0,<3
+scikit-learn>=1.5
+scipy>=1.13
+matplotlib>=3.9
+
+# mlflow 3 retired the filesystem tracking backend, which is why src/config.py
+# defaults to a SQLite tracking URI rather than ./mlruns.
+mlflow>=3.0
+
+lightgbm>=4.5
+xgboost>=2.1
+
+requests
+pyarrow
+python-dotenv
+typer>=0.12
+
+# soccerdata is unused in Stage 1 and required by src/ingest/fbref.py in
+# Stage 2. 1.9 is the first release whose Understat reader targets the new
+# JSON API rather than the retired inline-JSON page scrape.
+soccerdata>=1.9
+
+ruff
+pytest
