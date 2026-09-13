@@ -126,6 +126,54 @@ def fetch_division_season(
     return pd.concat([df, meta], axis=1)
 
 
+# Columns that are numeric in intent. Anything else — team names, referees,
+# result letters — must never be coerced, so the decision is made from the data
+# rather than from a hand-maintained list of the 199 columns the site publishes.
+_NUMERIC_SHARE = 0.9
+
+
+def _harmonise_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce odds/statistic columns that one bad cell turned into text.
+
+    A single junk cell makes pandas read that column as text *for the whole
+    file* — observed in the wild as ``#REF!`` (a broken Excel reference), a
+    stray ``#``, a header row leaked into the data (``1xBet``) and a digit with
+    a trailing non-breaking space. The other 150+ files parse the same column as
+    float, so concatenating yields a mixed-type object column, and `to_parquet`
+    fails on it.
+
+    Coercion is decided per column by what the values look like: a column whose
+    non-null entries are at least 90% numeric is one, and the remainder is
+    damage. Team names and result letters are 0% numeric and are left alone.
+
+    This matters beyond the write. ``PSCH`` and ``B365CH`` are in
+    `odds.ODDS_PREFERENCES`; left as text they would fail `odds._valid` and
+    those matches would quietly fall through to a less sharp bookmaker.
+    """
+    for col in df.columns:
+        if df[col].dtype.kind not in {"O", "U", "T"}:
+            continue
+        values = df[col]
+        present = values.notna()
+        if not present.any():
+            continue
+        coerced = pd.to_numeric(values, errors="coerce")
+        parsed = coerced.notna()
+        if parsed.sum() < _NUMERIC_SHARE * present.sum():
+            continue  # genuinely a text column
+
+        lost = present & ~parsed
+        if lost.any():
+            log.warning(
+                "%s: %d non-numeric cell(s) coerced to NaN: %s",
+                col,
+                int(lost.sum()),
+                sorted({repr(v) for v in values[lost].unique()})[:5],
+            )
+        df[col] = coerced
+    return df
+
+
 def fetch(
     divisions: list[str],
     seasons: list[int],
@@ -154,7 +202,7 @@ def fetch(
     # Column sets differ across seasons as bookmakers come and go, so the union
     # is intentional; missing odds columns become NaN and the odds layer falls
     # back to whichever bookmaker that season actually has.
-    out = pd.concat(frames, ignore_index=True, sort=False)
+    out = _harmonise_numeric(pd.concat(frames, ignore_index=True, sort=False))
     out.to_parquet(COMBINED_PATH, index=False)
     log.info(
         "Wrote %d matches across %d divisions and %d seasons to %s",

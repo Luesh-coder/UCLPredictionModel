@@ -13,7 +13,13 @@ import pandas as pd
 import pytest
 
 from src.ingest.build_dataset import CANONICAL_COLUMNS, build
-from src.ingest.football_data import _decode, _parse_dates, _read_csv, season_code
+from src.ingest.football_data import (
+    _decode,
+    _harmonise_numeric,
+    _parse_dates,
+    _read_csv,
+    season_code,
+)
 from src.ingest.odds import add_market_probabilities
 from src.ingest.teams import canonical_team, normalise, unmapped
 
@@ -244,3 +250,63 @@ def test_build_drops_rows_with_an_unrecognised_result(football_data_csv):
     out = build(raw)
     assert len(out) == 2
     assert set(out["result"].dropna()) <= {"H", "D", "A"}
+
+
+# --- mixed-dtype harmonisation ----------------------------------------------
+
+
+def test_harmonise_coerces_a_column_one_bad_cell_turned_into_text():
+    """All four poison values were observed in real files, not invented.
+
+    One junk cell makes pandas read that column as text for the whole file while
+    the other 150+ files read it as float, so the concatenation is an object
+    column and `to_parquet` refuses it.
+    """
+    clean = [f"{v:.2f}" for v in np.linspace(1.2, 9.5, 49)]
+    df = pd.DataFrame(
+        {
+            "PSCH": ["#REF!", *clean],
+            "B365CH": ["#", *clean],
+            "1XBH": ["1xBet", *clean],
+            "BbAH": ["8 ", *clean],
+        }
+    )
+    out = _harmonise_numeric(df.copy())
+
+    assert all(out[c].dtype.kind == "f" for c in df.columns)
+    assert out["PSCH"].tolist()[1] == pytest.approx(1.2)
+    # Only the poisoned cell is lost; the other 49 survive.
+    assert all(out[c].isna().sum() == 1 for c in df.columns)
+
+
+def test_harmonise_leaves_a_column_that_is_mostly_damaged_alone():
+    """The 90% share is a guard: a column that is half junk is not a number
+    column with a bad cell, it is something this parser does not understand,
+    and quietly turning most of it into NaN would hide that."""
+    df = pd.DataFrame({"Mystery": ["1.5", "n/k", "2.0", "void", "3.0", "tbc"]})
+    out = _harmonise_numeric(df.copy())
+    assert out["Mystery"].tolist() == df["Mystery"].tolist()
+
+
+def test_harmonise_leaves_genuine_text_columns_alone():
+    """Team names must survive: coercing them would erase the whole column."""
+    df = pd.DataFrame(
+        {"HomeTeam": ["Arsenal", "Celtic", "Ajax"], "FTR": ["H", "D", "A"]}
+    )
+    out = _harmonise_numeric(df.copy())
+    assert out["HomeTeam"].tolist() == ["Arsenal", "Celtic", "Ajax"]
+    assert out["FTR"].tolist() == ["H", "D", "A"]
+
+
+def test_harmonise_keeps_the_odds_columns_readable_by_the_odds_layer():
+    """The point of the coercion: `PSCH` left as text fails `_valid` silently.
+
+    A text Pinnacle column does not raise — it simply never matches, and every
+    affected match falls through to a less sharp bookmaker.
+    """
+    raw = pd.DataFrame(
+        {"PSCH": ["2.00", "#REF!"], "PSCD": [3.5, 3.5], "PSCA": [4.0, 4.0]}
+    )
+    priced = add_market_probabilities(_harmonise_numeric(raw.copy()))
+    assert priced.loc[0, "odds_source"] == "pinnacle_closing"
+    assert pd.isna(priced.loc[1, "odds_source"])  # the damaged row, honestly unpriced

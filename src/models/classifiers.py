@@ -94,7 +94,9 @@ class MarketBaseline(BaseEstimator, ClassifierMixin):
         missing = [c for c in self.columns if c not in X.columns]
         if missing:
             raise KeyError(f"MarketBaseline needs {missing}; run the ingest stage first")
-        proba = X[list(self.columns)].to_numpy(dtype=float)
+        # copy=True because the fallback below writes into this array, and under
+        # pandas' copy-on-write `to_numpy` hands back a read-only view.
+        proba = X[list(self.columns)].to_numpy(dtype=float, copy=True)
 
         # Unpriced matches (no bookmaker covered them) fall back to the league's
         # long-run base rates rather than NaN, so the baseline still returns a
