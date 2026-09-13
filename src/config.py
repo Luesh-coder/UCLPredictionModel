@@ -43,14 +43,26 @@ MLFLOW_EXPERIMENT = os.getenv("MLFLOW_EXPERIMENT", "ucl-match-outcome")
 # is the four-digit pair of two-digit years, e.g. 2425 for 2024/25.
 FOOTBALL_DATA_URL = "https://www.football-data.co.uk/mmz4281/{season}/{div}.csv"
 
-# football-data's division codes for the big five leagues, mapped to the league
-# names used in the canonical match table.
+# football-data's division codes, mapped to the league names used in the
+# canonical match table.
+#
+# The big five are the bulk of the data. The six below them are here for Stage
+# 2: they are where the rest of the Champions League field plays its domestic
+# football, and a club with no domestic history would enter the global Elo pool
+# at the default 1500 and stay near it — its rating moving on ~8 European
+# matches a season — which would then contaminate every side it faced.
 DIVISION_NAMES = {
     "E0": "ENG-Premier League",
     "SP1": "ESP-La Liga",
     "I1": "ITA-Serie A",
     "D1": "GER-Bundesliga",
     "F1": "FRA-Ligue 1",
+    "N1": "NED-Eredivisie",
+    "P1": "POR-Primeira Liga",
+    "B1": "BEL-Pro League",
+    "T1": "TUR-Super Lig",
+    "SC0": "SCO-Premiership",
+    "G1": "GRE-Super League",
 }
 DEFAULT_DIVISIONS = list(DIVISION_NAMES)
 

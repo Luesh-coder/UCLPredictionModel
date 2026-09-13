@@ -15,6 +15,7 @@ from src.config import OUTCOMES
 from src.features.build_features import build_features, xy
 from src.models.classifiers import (
     EloBaseline,
+    MarketBaseline,
     PriorBaseline,
     make_logistic,
     predict_proba_frame,
@@ -158,3 +159,26 @@ def test_logistic_beats_the_prior_baseline_in_sample(features):
     prior = predict_proba_frame(PriorBaseline().fit(X, y), X)
     logistic = predict_proba_frame(make_logistic().fit(X, y), X)
     assert ranked_probability_score(y, logistic) < ranked_probability_score(y, prior)
+
+
+def test_market_baseline_fills_unpriced_rows_without_writing_to_a_read_only_array():
+    """Regression: the fallback wrote into the frame's own buffer.
+
+    Under pandas' copy-on-write `to_numpy` returns a read-only view, so the
+    fallback assignment raised `ValueError: assignment destination is read-only`
+    — but only on a fold that actually contained an unpriced match, which the
+    big-five data never produced.
+    """
+    X = pd.DataFrame(
+        {
+            "odds_H": [0.5, np.nan],
+            "odds_D": [0.25, np.nan],
+            "odds_A": [0.25, np.nan],
+        }
+    )
+    proba = MarketBaseline().fit(X).predict_proba(X)
+
+    assert proba.shape == (2, 3)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    assert np.allclose(proba[0], [0.5, 0.25, 0.25])
+    assert X["odds_H"].isna().sum() == 1  # the input frame is not mutated
