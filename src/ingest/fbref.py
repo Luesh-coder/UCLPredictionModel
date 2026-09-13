@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -33,7 +34,17 @@ log = logging.getLogger(__name__)
 SCHEDULE_PATH = RAW_DIR / "fbref_ucl_schedule.parquet"
 
 # soccerdata reads this file at import time to learn about non-built-in leagues.
-LEAGUE_DICT_PATH = Path.home() / "soccerdata" / "config" / "league_dict.json"
+#
+# Resolved exactly the way `soccerdata._config` resolves it, rather than
+# hardcoded to ~/soccerdata: `src.config` points SOCCERDATA_DIR at the project
+# cache, so a hardcoded home-directory path writes the registration to a file
+# nothing ever reads, and the failure surfaces as "Invalid league" — which
+# looks like a typo in the league name rather than a misdirected write.
+LEAGUE_DICT_PATH = (
+    Path(os.environ.get("SOCCERDATA_DIR", Path.home() / "soccerdata"))
+    / "config"
+    / "league_dict.json"
+)
 
 
 def register_ucl() -> None:
@@ -42,16 +53,25 @@ def register_ucl() -> None:
     Idempotent: re-registering an already-known league rewrites the same entry.
     """
     LEAGUE_DICT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        # FBref's own name for the competition, exactly as it appears on
+        # /en/comps/: "UEFA Champions League", not "Champions League". The
+        # distinction matters beyond pedantry — the same page lists "UEFA
+        # Women's Champions League", so the match has to be exact.
+        "FBref": "UEFA Champions League",
+        "season_start": "Aug",
+        "season_end": "May",
+    }
+
     existing = {}
     if LEAGUE_DICT_PATH.exists():
         existing = json.loads(LEAGUE_DICT_PATH.read_text(encoding="utf-8"))
 
-    if UCL_LEAGUE not in existing:
-        existing[UCL_LEAGUE] = {
-            "FBref": "Champions League",
-            "season_start": "Aug",
-            "season_end": "May",
-        }
+    # Rewrite whenever the entry differs, not merely when it is absent. A wrong
+    # registration written once would otherwise be permanent, and it does not
+    # fail loudly: soccerdata simply reports an empty league list.
+    if existing.get(UCL_LEAGUE) != entry:
+        existing[UCL_LEAGUE] = entry
         LEAGUE_DICT_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         log.info("Registered %s in %s", UCL_LEAGUE, LEAGUE_DICT_PATH)
 
@@ -62,9 +82,14 @@ def fetch_schedule(seasons: list[int], *, refresh: bool = False) -> pd.DataFrame
     Falls back to one season at a time if the batch scrape fails, so a single
     bad season cannot cost an entire backfill.
     """
-    import soccerdata as sd
-
+    # Must precede the import. `soccerdata._config` merges the custom league
+    # dict into LEAGUE_DICT at *import* time, so registering afterwards leaves
+    # this process still believing the Champions League does not exist — and
+    # the error it raises ("Invalid league") points at the league name rather
+    # than at the ordering, which makes it a slow one to find.
     register_ucl()
+
+    import soccerdata as sd
 
     if SCHEDULE_PATH.exists() and not refresh:
         cached = pd.read_parquet(SCHEDULE_PATH)
